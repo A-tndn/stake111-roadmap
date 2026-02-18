@@ -33,7 +33,9 @@ export const config = {
   superMasterCommission: parseFloat(process.env.SUPER_MASTER_COMMISSION || '0.3'),
   platformCommission: parseFloat(process.env.PLATFORM_COMMISSION || '0.2'),
 
-  corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  corsOrigin: (process.env.CORS_ORIGIN || 'http://localhost:3000').includes(',')
+    ? (process.env.CORS_ORIGIN || '').split(',').map(s => s.trim())
+    : process.env.CORS_ORIGIN || 'http://localhost:3000',
 };
 
 const requiredEnvVars = ['DATABASE_URL', 'JWT_SECRET', 'REFRESH_TOKEN_SECRET'];

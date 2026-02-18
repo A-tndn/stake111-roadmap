@@ -13,7 +13,17 @@ class MatchService {
           where: { cricketApiId: apiMatch.id },
         });
 
-        const matchData = {
+        const formatScore = (innings: any[]) => {
+          if (!innings || innings.length === 0) return null;
+          return innings
+            .map((inn: any) => `${inn.r}/${inn.w} (${inn.o})`)
+            .join(' & ');
+        };
+
+        const team1Innings = apiMatch.score?.filter((_: any, i: number) => i % 2 === 0) || [];
+        const team2Innings = apiMatch.score?.filter((_: any, i: number) => i % 2 !== 0) || [];
+
+        const matchData: any = {
           cricketApiId: apiMatch.id,
           name: apiMatch.name,
           shortName: `${apiMatch.teams[0]} vs ${apiMatch.teams[1]}`,
@@ -21,9 +31,13 @@ class MatchService {
           venue: apiMatch.venue || 'TBA',
           team1: apiMatch.teams[0],
           team2: apiMatch.teams[1],
-          tournament: apiMatch.series_id || 'Unknown',
+          team1Logo: apiMatch.teamInfo?.find((t: any) => t.name === apiMatch.teams[0])?.img || null,
+          team2Logo: apiMatch.teamInfo?.find((t: any) => t.name === apiMatch.teams[1])?.img || null,
+          tournament: this.extractTournament(apiMatch.name) || 'Unknown',
           startTime: new Date(apiMatch.dateTimeGMT),
           status: this.mapMatchStatus(apiMatch),
+          team1Score: formatScore(team1Innings),
+          team2Score: formatScore(team2Innings),
           lastSyncedAt: new Date(),
         };
 
@@ -69,9 +83,18 @@ class MatchService {
             lastSyncedAt: new Date(),
           };
 
-          if (scoreData.score) {
-            updateData.team1Score = scoreData.score[0]?.inning || null;
-            updateData.team2Score = scoreData.score[1]?.inning || null;
+          if (scoreData.score && scoreData.score.length > 0) {
+            const formatScore = (innings: any[]) => {
+              if (!innings || innings.length === 0) return null;
+              return innings
+                .map((inn: any) => `${inn.r}/${inn.w} (${inn.o})`)
+                .join(' & ');
+            };
+            // Group scores by team (team1 = odd innings index 0,2; team2 = even 1,3)
+            const team1Innings = scoreData.score.filter((_: any, i: number) => i % 2 === 0);
+            const team2Innings = scoreData.score.filter((_: any, i: number) => i % 2 !== 0);
+            updateData.team1Score = formatScore(team1Innings);
+            updateData.team2Score = formatScore(team2Innings);
           }
 
           if (scoreData.status === 'completed') {
@@ -155,6 +178,37 @@ class MatchService {
     if (match.matchEnded) return MatchStatus.COMPLETED;
     if (match.matchStarted) return MatchStatus.LIVE;
     return MatchStatus.UPCOMING;
+  }
+
+  private extractTournament(matchName: string): string {
+    // Match name format: "Team1 vs Team2, 21st Match, Group A, ICC Men's T20 World Cup 2026"
+    // Extract everything after the last comma-separated segment that looks like a tournament
+    const parts = matchName.split(', ');
+    // Tournament name is usually the last part(s)
+    if (parts.length >= 3) {
+      // Find the first part that looks like a tournament/series name (not a match number/group)
+      for (let i = parts.length - 1; i >= 1; i--) {
+        const part = parts[i];
+        if (
+          part.includes('Trophy') ||
+          part.includes('Cup') ||
+          part.includes('League') ||
+          part.includes('Series') ||
+          part.includes('Championship') ||
+          part.includes('Tournament') ||
+          part.includes('Premier') ||
+          part.includes('IPL') ||
+          part.includes('ICC') ||
+          part.includes('Asia') ||
+          /20\d{2}/.test(part)
+        ) {
+          return parts.slice(i).join(', ');
+        }
+      }
+      // Fallback: return last part
+      return parts[parts.length - 1];
+    }
+    return parts.length > 1 ? parts[parts.length - 1] : matchName;
   }
 
   private extractWinner(result: string): string | null {

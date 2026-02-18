@@ -36,3 +36,6 @@ redis_data/
 
 # Logs
 logs/
+
+# Claude
+.claude/

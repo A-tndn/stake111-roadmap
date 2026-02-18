@@ -3,18 +3,29 @@ import { AuthRequest } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { successResponse } from '../utils/response';
 import authService from '../services/auth.service';
+import { recordFailedLogin, clearFailedLogins } from '../middleware/security';
 
 export const login = asyncHandler(async (req: AuthRequest, res: Response) => {
   const { username, password, userType } = req.body;
+  const ip = req.ip || req.headers['x-forwarded-for']?.toString() || 'unknown';
 
-  let result;
-  if (userType === 'agent') {
-    result = await authService.loginAgent(username, password);
-  } else {
-    result = await authService.loginPlayer(username, password);
+  try {
+    let result;
+    if (userType === 'agent') {
+      result = await authService.loginAgent(username, password);
+    } else {
+      result = await authService.loginPlayer(username, password);
+    }
+
+    // Clear failed login attempts on success
+    clearFailedLogins(ip);
+
+    successResponse(res, 'Login successful', result);
+  } catch (error) {
+    // Record failed login attempt
+    recordFailedLogin(ip);
+    throw error;
   }
-
-  successResponse(res, 'Login successful', result);
 });
 
 export const getMe = asyncHandler(async (req: AuthRequest, res: Response) => {

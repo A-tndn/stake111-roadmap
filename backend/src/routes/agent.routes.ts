@@ -9,7 +9,7 @@ const router = Router();
 router.use(authenticate);
 
 const createAgentSchema = Joi.object({
-  username: Joi.string().alphanum().min(3).max(50).required(),
+  username: Joi.string().pattern(/^[a-zA-Z0-9_]+$/).min(3).max(50).required(),
   email: Joi.string().email().optional(),
   phone: Joi.string()
     .pattern(/^\+?[1-9]\d{1,14}$/)
@@ -23,7 +23,7 @@ const createAgentSchema = Joi.object({
 });
 
 const createPlayerSchema = Joi.object({
-  username: Joi.string().alphanum().min(3).max(50).required(),
+  username: Joi.string().pattern(/^[a-zA-Z0-9_]+$/).min(3).max(50).required(),
   password: Joi.string().min(6).max(100).required(),
   displayName: Joi.string().min(2).max(100).required(),
   email: Joi.string().email().optional(),
@@ -31,6 +31,9 @@ const createPlayerSchema = Joi.object({
     .pattern(/^\+?[1-9]\d{1,14}$/)
     .optional(),
   creditLimit: Joi.number().min(0).default(10000),
+  sportShare: Joi.number().min(0).max(100).optional(),
+  matchCommission: Joi.number().min(0).max(100).optional(),
+  sessionCommission: Joi.number().min(0).max(100).optional(),
 });
 
 const transferCreditSchema = Joi.object({

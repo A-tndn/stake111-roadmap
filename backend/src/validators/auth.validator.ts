@@ -3,7 +3,7 @@ import Joi from 'joi';
 export const loginSchema = Joi.object({
   username: Joi.string().required().min(3).max(50),
   password: Joi.string().required().min(6),
-  userType: Joi.string().valid('player', 'agent').default('player'),
+  userType: Joi.string().valid('player', 'agent', 'master').default('player'),
 });
 
 export const registerPlayerSchema = Joi.object({

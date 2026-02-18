@@ -50,6 +50,27 @@ const config: Config = {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        // Betting-specific colors
+        back: {
+          DEFAULT: "#72BBEF",
+          light: "#A5D8F6",
+          dark: "#5DADE2",
+        },
+        lay: {
+          DEFAULT: "#FAA9BA",
+          light: "#FCC8D3",
+          dark: "#EC7063",
+        },
+        brand: {
+          teal: "#4A7A7B",
+          "teal-dark": "#2C5F61",
+          orange: "#F39C12",
+          blue: "#5DADE2",
+          red: "#EC7063",
+          green: "#27AE60",
+          gold: "#F1C40F",
+        },
+        inplay: "#E74C3C",
       },
       borderRadius: {
         lg: "var(--radius)",
@@ -65,10 +86,30 @@ const config: Config = {
           from: { height: "var(--radix-accordion-content-height)" },
           to: { height: "0" },
         },
+        "slide-up": {
+          from: { transform: "translateY(100%)" },
+          to: { transform: "translateY(0)" },
+        },
+        "slide-down": {
+          from: { transform: "translateY(0)" },
+          to: { transform: "translateY(100%)" },
+        },
+        "pulse-dot": {
+          "0%, 100%": { opacity: "1" },
+          "50%": { opacity: "0.3" },
+        },
+        marquee: {
+          from: { transform: "translateX(100%)" },
+          to: { transform: "translateX(-100%)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        "slide-up": "slide-up 0.3s ease-out",
+        "slide-down": "slide-down 0.3s ease-out",
+        "pulse-dot": "pulse-dot 1.5s ease-in-out infinite",
+        marquee: "marquee 20s linear infinite",
       },
     },
   },

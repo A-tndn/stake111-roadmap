@@ -3,7 +3,7 @@ import { api } from '@/lib/api';
 interface LoginCredentials {
   username: string;
   password: string;
-  userType: 'player' | 'agent';
+  userType: 'player' | 'agent' | 'master';
 }
 
 interface AuthResponse {
@@ -17,7 +17,7 @@ interface AuthResponse {
       username: string;
       displayName?: string;
       role: string;
-      type: 'user' | 'agent';
+      type: 'user' | 'agent' | 'master_admin';
       balance?: number;
     };
   };

@@ -1,36 +1,42 @@
+# ============================================
+# Development Docker Compose
+# ============================================
 version: '3.8'
 
 services:
   postgres:
-    image: postgres:15-alpine
-    container_name: cricket-betting-db
+    image: postgres:16-alpine
+    container_name: cbp-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: cricket_user
-      POSTGRES_PASSWORD: cricket_pass_123
-      POSTGRES_DB: cricket_betting
+      POSTGRES_USER: ${POSTGRES_USER:-cbp_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cbp_password}
+      POSTGRES_DB: ${POSTGRES_DB:-cricket_betting}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    networks:
-      - cricket-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cbp_user} -d ${POSTGRES_DB:-cricket_betting}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
-    container_name: cricket-betting-redis
+    container_name: cbp-redis
     restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    networks:
-      - cricket-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres_data:
   redis_data:
-
-networks:
-  cricket-network:
-    driver: bridge

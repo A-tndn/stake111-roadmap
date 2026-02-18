@@ -8,12 +8,28 @@ import logger from './config/logger';
 import { connectRedis } from './db/redis';
 import { errorHandler } from './middleware/errorHandler';
 import { apiLimiter } from './middleware/rateLimiter';
+import { sanitizeRequest, additionalSecurityHeaders } from './middleware/security';
+
+// Cron Jobs
+import { startBetSettlementJob, startBetVoidJob } from './jobs/betSettlement.job';
+import { startWeeklySettlementJob, startMonthlySettlementJob } from './jobs/settlementGeneration.job';
+import { startNotificationCleanupJob } from './jobs/notificationCleanup.job';
+import { startMatchSyncJob } from './jobs/matchSync.job';
 
 // Routes
 import authRoutes from './routes/auth.routes';
 import matchRoutes from './routes/match.routes';
 import betRoutes from './routes/bet.routes';
 import agentRoutes from './routes/agent.routes';
+import masterRoutes from './routes/master.routes';
+import adminRoutes from './routes/admin.routes';
+import depositRoutes from './routes/deposit.routes';
+import withdrawalRoutes from './routes/withdrawal.routes';
+import casinoRoutes from './routes/casino.routes';
+import notificationRoutes from './routes/notification.routes';
+import analyticsRoutes from './routes/analytics.routes';
+import supportRoutes from './routes/support.routes';
+import agentBetRoutes from './routes/agent-bet.routes';
 
 const app: Application = express();
 const httpServer = createServer(app);
@@ -24,34 +40,97 @@ const io = new SocketIOServer(httpServer, {
     origin: config.corsOrigin,
     methods: ['GET', 'POST'],
   },
+  pingTimeout: 60000,
+  pingInterval: 25000,
 });
 
-// Middleware
-app.use(helmet());
-app.use(cors({ origin: config.corsOrigin, credentials: true }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// ============================================
+// SECURITY MIDDLEWARE STACK
+// ============================================
 
-// Rate limiting
+// Trust proxy (for rate limiters behind Nginx/load balancer)
+app.set('trust proxy', 1);
+
+// Helmet — security headers
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'https:'],
+      connectSrc: ["'self'", ...(Array.isArray(config.corsOrigin) ? config.corsOrigin : [config.corsOrigin])],
+    },
+  },
+  crossOriginEmbedderPolicy: false,
+}));
+
+// Additional security headers
+app.use(additionalSecurityHeaders);
+
+// CORS
+app.use(cors({
+  origin: config.corsOrigin,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  maxAge: 86400, // Cache preflight for 24 hours
+}));
+
+// Body parsing with size limits
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+// Sanitize incoming requests
+app.use(sanitizeRequest);
+
+// Global API rate limiting
 app.use('/api', apiLimiter);
 
-// Health check
-app.get('/health', (req, res) => {
+// ============================================
+// HEALTH & READINESS
+// ============================================
+
+app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
+    environment: config.nodeEnv,
   });
 });
 
-// API Routes
+app.get('/ready', async (_req, res) => {
+  try {
+    // Check database connection
+    const { default: prisma } = await import('./db');
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ status: 'ready', database: 'connected' });
+  } catch {
+    res.status(503).json({ status: 'not ready', database: 'disconnected' });
+  }
+});
+
+// ============================================
+// API ROUTES
+// ============================================
+
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/matches', matchRoutes);
 app.use('/api/v1/bets', betRoutes);
 app.use('/api/v1/agents', agentRoutes);
+app.use('/api/v1/master', masterRoutes);
+app.use('/api/v1/admin', adminRoutes);
+app.use('/api/v1/deposits', depositRoutes);
+app.use('/api/v1/withdrawals', withdrawalRoutes);
+app.use('/api/v1/casino', casinoRoutes);
+app.use('/api/v1/notifications', notificationRoutes);
+app.use('/api/v1/analytics', analyticsRoutes);
+app.use('/api/v1/support', supportRoutes);
+app.use('/api/v1/agent-bets', agentBetRoutes);
 
 // 404 handler
-app.use('*', (req, res) => {
+app.use('*', (_req, res) => {
   res.status(404).json({
     success: false,
     message: 'Route not found',
@@ -61,7 +140,10 @@ app.use('*', (req, res) => {
 // Error handler
 app.use(errorHandler);
 
-// Socket.io events
+// ============================================
+// SOCKET.IO
+// ============================================
+
 io.on('connection', (socket) => {
   logger.info(`Socket connected: ${socket.id}`);
 
@@ -74,6 +156,16 @@ io.on('connection', (socket) => {
     socket.leave(`match:${matchId}`);
   });
 
+  socket.on('join-user', (userId: string) => {
+    socket.join(`user:${userId}`);
+    logger.debug(`Socket ${socket.id} joined user:${userId}`);
+  });
+
+  socket.on('join-admin', (agentId: string) => {
+    socket.join(`admin:${agentId}`);
+    logger.debug(`Socket ${socket.id} joined admin:${agentId}`);
+  });
+
   socket.on('disconnect', () => {
     logger.debug(`Socket disconnected: ${socket.id}`);
   });
@@ -82,15 +174,27 @@ io.on('connection', (socket) => {
 // Export io for use in other modules
 export { io };
 
-// Start server
+// ============================================
+// START SERVER
+// ============================================
+
 const startServer = async () => {
   try {
     // Connect to Redis
     try {
       await connectRedis();
+      logger.info('Redis connected successfully');
     } catch (error) {
       logger.warn('Redis connection failed, continuing without cache');
     }
+
+    // Start cron jobs
+    startBetSettlementJob();
+    startBetVoidJob();
+    startWeeklySettlementJob();
+    startMonthlySettlementJob();
+    startNotificationCleanupJob();
+    startMatchSyncJob();
 
     // Start HTTP server
     httpServer.listen(config.port, () => {
@@ -98,6 +202,20 @@ const startServer = async () => {
       logger.info(`Environment: ${config.nodeEnv}`);
       logger.info(`API Base URL: ${config.apiBaseUrl}`);
     });
+
+    // Graceful shutdown
+    const shutdown = async () => {
+      logger.info('Shutting down gracefully...');
+      httpServer.close(() => {
+        logger.info('HTTP server closed');
+        process.exit(0);
+      });
+      // Force exit after 10 seconds
+      setTimeout(() => process.exit(1), 10000);
+    };
+
+    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
   } catch (error) {
     logger.error('Failed to start server:', error);
     process.exit(1);

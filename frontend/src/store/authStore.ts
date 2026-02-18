@@ -6,7 +6,7 @@ interface User {
   username: string;
   displayName?: string;
   role: string;
-  type: 'user' | 'agent';
+  type: 'user' | 'agent' | 'master_admin';
   balance?: number;
 }
 

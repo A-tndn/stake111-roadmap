@@ -2,6 +2,7 @@ import { Router } from 'express';
 import * as betController from '../controllers/bet.controller';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
+import { bettingLimiter } from '../middleware/rateLimiter';
 import Joi from 'joi';
 
 const router = Router();
@@ -30,7 +31,7 @@ const placeBetSchema = Joi.object({
   description: Joi.string().optional(),
 });
 
-router.post('/', validate(placeBetSchema), betController.placeBet);
+router.post('/', bettingLimiter, validate(placeBetSchema), betController.placeBet);
 router.get('/', betController.getUserBets);
 router.get('/:id', betController.getBetById);
 

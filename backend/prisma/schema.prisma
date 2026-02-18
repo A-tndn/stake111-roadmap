@@ -1,5 +1,6 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {
@@ -12,6 +13,7 @@ datasource db {
 // ============================================
 
 enum UserRole {
+  MASTER_ADMIN
   SUPER_ADMIN
   ADMIN
   SUPER_MASTER_AGENT
@@ -82,6 +84,7 @@ enum TransactionType {
   CREDIT_TRANSFER
   DEBIT_TRANSFER
   ADJUSTMENT
+  SETTLEMENT_PAYOUT
 }
 
 enum TransactionStatus {
@@ -89,6 +92,59 @@ enum TransactionStatus {
   COMPLETED
   FAILED
   CANCELLED
+}
+
+enum SettlementStatus {
+  PENDING
+  APPROVED
+  PAID
+  REJECTED
+  ON_HOLD
+}
+
+enum DepositStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum WithdrawalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  PROCESSING
+}
+
+enum CasinoGameType {
+  TEEN_PATTI
+  INDIAN_POKER
+  HI_LO
+  COIN_FLIP
+  DICE_ROLL
+  ROULETTE
+  ANDAR_BAHAR
+}
+
+enum CasinoRoundStatus {
+  OPEN
+  CLOSED
+  SETTLED
+  CANCELLED
+}
+
+enum Permission {
+  CAN_CREATE_CLIENTS
+  CAN_MANAGE_DEPOSITS
+  CAN_MANAGE_WITHDRAWALS
+  CAN_VIEW_REPORTS
+  CAN_MANAGE_MATCHES
+  CAN_SETTLE_BETS
+  CAN_ACCESS_CASINO
+  CAN_CREATE_SUB_AGENTS
+  CAN_MANAGE_ODDS
+  CAN_VIEW_AUDIT_LOGS
 }
 
 // ============================================
@@ -111,19 +167,47 @@ model User {
   totalDeposited    Decimal         @default(0) @db.Decimal(12, 2)
   totalWithdrawn    Decimal         @default(0) @db.Decimal(12, 2)
 
-  // Relationships
+  // Betting Limits
+  minBet            Decimal         @default(10) @db.Decimal(12, 2)
+  maxBet            Decimal         @default(100000) @db.Decimal(12, 2)
+  matchLimit        Decimal         @default(50000) @db.Decimal(12, 2)
+  sessionLimit      Decimal         @default(25000) @db.Decimal(12, 2)
+
+  // Hierarchy
   agentId           String?
   agent             Agent?          @relation("AgentPlayers", fields: [agentId], references: [id])
+  hierarchyPath     String?         // e.g., "M0001/A4352/C7489"
+  level             Int             @default(3)  // 0=Master, 1=Admin, 2=Agent, 3=Client
+
+  // Sport Share & Commission
+  sportSharePercent Decimal         @default(0) @db.Decimal(5, 2)
+  accountType       String          @default("STANDARD") // NOC, PREMIUM, VIP, STANDARD
+
+  // Locks
+  userLocked        Boolean         @default(false)
+  betLocked         Boolean         @default(false)
+
+  // Suspension
+  isSuspended       Boolean         @default(false)
+  suspendReason     String?
+
+  // 2FA
+  twoFactorSecret   String?
+  twoFactorEnabled  Boolean         @default(false)
 
   // Betting
   bets              Bet[]
   transactions      Transaction[]
+  depositRequests   DepositRequest[]
+  withdrawalRequests WithdrawalRequest[]
+  casinoBets        CasinoBet[]
 
   // Tracking
   lastLoginAt       DateTime?
   lastLoginIp       String?
   loginAttempts     Int             @default(0)
   lockedUntil       DateTime?
+  lastSettlement    DateTime?
 
   // Metadata
   metadata          Json?
@@ -135,6 +219,8 @@ model User {
   @@index([agentId])
   @@index([status])
   @@index([createdAt])
+  @@index([role])
+  @@index([accountType])
   @@map("users")
 }
 
@@ -152,6 +238,8 @@ model Agent {
   parentAgentId     String?
   parentAgent       Agent?          @relation("AgentHierarchy", fields: [parentAgentId], references: [id])
   subAgents         Agent[]         @relation("AgentHierarchy")
+  hierarchyPath     String?         // e.g., "M0001/A4352"
+  level             Int             @default(1)  // 0=Master, 1=SuperMaster, 2=Master, 3=Agent
 
   // Financial
   balance           Decimal         @default(0) @db.Decimal(12, 2)
@@ -161,6 +249,19 @@ model Agent {
   // Commission
   commissionRate    Decimal         @default(0) @db.Decimal(5, 2)
   totalCommission   Decimal         @default(0) @db.Decimal(12, 2)
+  pendingSettlement Decimal         @default(0) @db.Decimal(12, 2)
+  sportSharePercent Decimal         @default(0) @db.Decimal(5, 2)
+
+  // Permissions
+  permissions       Permission[]
+
+  // Locks
+  userLocked        Boolean         @default(false)
+  betLocked         Boolean         @default(false)
+
+  // 2FA
+  twoFactorSecret   String?
+  twoFactorEnabled  Boolean         @default(false)
 
   // Players
   players           User[]          @relation("AgentPlayers")
@@ -168,6 +269,9 @@ model Agent {
   // Transactions
   transactions      Transaction[]
   commissionsEarned Commission[]    @relation("AgentCommissions")
+  settlements       Settlement[]    @relation("AgentSettlements")
+  processedDeposits DepositRequest[]  @relation("ProcessedDeposits")
+  processedWithdrawals WithdrawalRequest[] @relation("ProcessedWithdrawals")
 
   // KYC
   kycDocuments      Json?
@@ -178,9 +282,15 @@ model Agent {
   maxPlayersAllowed Int             @default(100)
   maxExposure       Decimal         @default(100000) @db.Decimal(12, 2)
 
+  // Stats (denormalized for performance)
+  totalClients      Int             @default(0)
+  activeClients     Int             @default(0)
+  totalRevenue      Decimal         @default(0) @db.Decimal(12, 2)
+
   // Tracking
   lastLoginAt       DateTime?
   lastLoginIp       String?
+  lastSettlement    DateTime?
 
   // Metadata
   metadata          Json?
@@ -225,12 +335,28 @@ model Match {
   // Status
   status            MatchStatus     @default(UPCOMING)
 
+  // Odds (Back & Lay for team1, team2, draw)
+  team1BackOdds     Decimal?        @db.Decimal(8, 2)
+  team1LayOdds      Decimal?        @db.Decimal(8, 2)
+  team2BackOdds     Decimal?        @db.Decimal(8, 2)
+  team2LayOdds      Decimal?        @db.Decimal(8, 2)
+  drawBackOdds      Decimal?        @db.Decimal(8, 2)
+  drawLayOdds       Decimal?        @db.Decimal(8, 2)
+
+  // Betting Controls
+  bettingLocked     Boolean         @default(false)
+  maxBetAmount      Decimal?        @db.Decimal(12, 2)
+  maxExposure       Decimal?        @db.Decimal(12, 2)
+
   // Results
   tossWinner        String?
   tossDecision      String?
   matchWinner       String?
   winType           String?
   winMargin         String?
+  isSettled         Boolean         @default(false)
+  settledAt         DateTime?
+  settledBy         String?
 
   // Scores
   team1Score        String?
@@ -242,6 +368,7 @@ model Match {
 
   // Betting
   bets              Bet[]
+  matchOddsHistory  MatchOddsHistory[]
   totalBetsAmount   Decimal         @default(0) @db.Decimal(12, 2)
   totalBetsCount    Int             @default(0)
 
@@ -253,12 +380,37 @@ model Match {
   metadata          Json?
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @updatedAt
+  createdBy         String?
 
   @@index([status])
   @@index([startTime])
   @@index([tournament])
   @@index([cricketApiId])
+  @@index([isSettled])
   @@map("matches")
+}
+
+model MatchOddsHistory {
+  id                String          @id @default(uuid())
+
+  matchId           String
+  match             Match           @relation(fields: [matchId], references: [id])
+
+  team1BackOdds     Decimal?        @db.Decimal(8, 2)
+  team1LayOdds      Decimal?        @db.Decimal(8, 2)
+  team2BackOdds     Decimal?        @db.Decimal(8, 2)
+  team2LayOdds      Decimal?        @db.Decimal(8, 2)
+  drawBackOdds      Decimal?        @db.Decimal(8, 2)
+  drawLayOdds       Decimal?        @db.Decimal(8, 2)
+
+  source            String?         // 'ADMIN', 'API', 'SYSTEM'
+  changedBy         String?
+
+  createdAt         DateTime        @default(now())
+
+  @@index([matchId])
+  @@index([createdAt])
+  @@map("match_odds_history")
 }
 
 model Bet {
@@ -274,6 +426,7 @@ model Bet {
   betType           BetType
   betOn             String
   description       String?
+  isBack            Boolean         @default(true) // true=back, false=lay
 
   // Financial
   amount            Decimal         @db.Decimal(12, 2)
@@ -370,6 +523,10 @@ model Commission {
   paid              Boolean         @default(false)
   paidAt            DateTime?
 
+  // Settlement reference
+  settlementId      String?
+  settlement        Settlement?     @relation(fields: [settlementId], references: [id])
+
   // Metadata
   calculatedAt      DateTime        @default(now())
   metadata          Json?
@@ -380,8 +537,300 @@ model Commission {
   @@index([agentId])
   @@index([paid])
   @@index([createdAt])
+  @@index([settlementId])
   @@map("commissions")
 }
+
+// ============================================
+// NEW MODELS - Phase 1
+// ============================================
+
+model Settlement {
+  id                    String              @id @default(uuid())
+
+  // Agent reference
+  agentId               String
+  agent                 Agent               @relation("AgentSettlements", fields: [agentId], references: [id])
+
+  // Period
+  periodStart           DateTime
+  periodEnd             DateTime
+
+  // Calculations
+  totalBetsPlaced       Int                 @default(0)
+  totalBetAmount        Decimal             @default(0) @db.Decimal(12, 2)
+  totalWinAmount        Decimal             @default(0) @db.Decimal(12, 2)
+  totalLossAmount       Decimal             @default(0) @db.Decimal(12, 2)
+  platformProfit        Decimal             @default(0) @db.Decimal(12, 2)
+  platformLoss          Decimal             @default(0) @db.Decimal(12, 2)
+  netProfit             Decimal             @default(0) @db.Decimal(12, 2)
+
+  // Commission
+  commissionRate        Decimal             @db.Decimal(5, 2)
+  commissionAmount      Decimal             @default(0) @db.Decimal(12, 2)
+  previousBalance       Decimal             @default(0) @db.Decimal(12, 2)
+  settlementAmount      Decimal             @default(0) @db.Decimal(12, 2)
+
+  // Commissions included
+  commissions           Commission[]
+
+  // Status & Payment
+  status                SettlementStatus    @default(PENDING)
+  paymentMethod         String?
+  paymentProof          String?             // URL to uploaded proof
+  paymentTransactionId  String?
+  paidBy                String?             // Master admin who processed
+  paidAt                DateTime?
+  approvedBy            String?
+  approvedAt            DateTime?
+
+  remarks               String?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  @@index([agentId])
+  @@index([status])
+  @@index([periodStart, periodEnd])
+  @@index([createdAt])
+  @@map("settlements")
+}
+
+model DepositRequest {
+  id                String          @id @default(uuid())
+
+  // User reference
+  userId            String
+  user              User            @relation(fields: [userId], references: [id])
+
+  // Amount & Method
+  amount            Decimal         @db.Decimal(12, 2)
+  paymentMethod     String          // UPI, BANK_TRANSFER, CASH, etc.
+  paymentProof      String?         // URL to uploaded proof image
+  transactionRef    String?         // user's payment reference/UTR number
+
+  // Status
+  status            DepositStatus   @default(PENDING)
+
+  // Processing
+  processedBy       String?         // Agent/Admin ID who processed
+  processedByAgent  Agent?          @relation("ProcessedDeposits", fields: [processedBy], references: [id])
+  processedAt       DateTime?
+  remarks           String?
+
+  // Metadata
+  metadata          Json?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([processedBy])
+  @@index([createdAt])
+  @@map("deposit_requests")
+}
+
+model WithdrawalRequest {
+  id                String              @id @default(uuid())
+
+  // User reference
+  userId            String
+  user              User                @relation(fields: [userId], references: [id])
+
+  // Amount
+  amount            Decimal             @db.Decimal(12, 2)
+
+  // Bank Details
+  bankName          String?
+  accountNumber     String?
+  ifscCode          String?
+  accountHolderName String?
+  paymentMethod     String              // UPI, BANK_TRANSFER, CASH, etc.
+  upiId             String?
+
+  // Status
+  status            WithdrawalStatus    @default(PENDING)
+
+  // Processing
+  processedBy       String?             // Agent/Admin ID who processed
+  processedByAgent  Agent?              @relation("ProcessedWithdrawals", fields: [processedBy], references: [id])
+  processedAt       DateTime?
+  paymentProof      String?             // proof of payment sent
+  paymentTransactionId String?
+  remarks           String?
+
+  // Metadata
+  metadata          Json?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([processedBy])
+  @@index([createdAt])
+  @@map("withdrawal_requests")
+}
+
+model CasinoGame {
+  id                String          @id @default(uuid())
+
+  // Game Details
+  gameName          String
+  gameType          CasinoGameType
+  description       String?
+  rules             String?         @db.Text
+  image             String?         // URL to game image
+
+  // Settings
+  minBet            Decimal         @default(10) @db.Decimal(12, 2)
+  maxBet            Decimal         @default(10000) @db.Decimal(12, 2)
+  rtp               Decimal         @default(96.0) @db.Decimal(5, 2)  // Return to Player %
+  houseEdge         Decimal         @default(4.0) @db.Decimal(5, 2)
+
+  // Status
+  enabled           Boolean         @default(true)
+  sortOrder         Int             @default(0)
+
+  // Relations
+  rounds            CasinoRound[]
+
+  // Metadata
+  metadata          Json?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([gameType])
+  @@index([enabled])
+  @@map("casino_games")
+}
+
+model CasinoRound {
+  id                String              @id @default(uuid())
+
+  // Game reference
+  gameId            String
+  game              CasinoGame          @relation(fields: [gameId], references: [id])
+
+  // Round Details
+  roundNumber       Int
+  status            CasinoRoundStatus   @default(OPEN)
+
+  // Provably Fair
+  serverSeed        String              // pre-generated hash
+  serverSeedHash    String              // SHA-256 of serverSeed (shown before round)
+  clientSeed        String?             // user-provided seed
+  nonce             Int                 @default(0)
+
+  // Result
+  result            Json?               // game-specific result data
+  resultHash        String?             // hash for verification
+
+  // Timing
+  startedAt         DateTime            @default(now())
+  closedAt          DateTime?
+  settledAt         DateTime?
+
+  // Bets
+  bets              CasinoBet[]
+  totalBetAmount    Decimal             @default(0) @db.Decimal(12, 2)
+  totalPayoutAmount Decimal             @default(0) @db.Decimal(12, 2)
+
+  // Metadata
+  metadata          Json?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  @@index([gameId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("casino_rounds")
+}
+
+model CasinoBet {
+  id                String          @id @default(uuid())
+
+  // References
+  userId            String
+  user              User            @relation(fields: [userId], references: [id])
+  roundId           String
+  round             CasinoRound     @relation(fields: [roundId], references: [id])
+
+  // Bet Details
+  betType           String          // game-specific bet type (e.g., "PLAYER", "BANKER", "HIGH", "LOW")
+  betData           Json?           // game-specific bet data
+
+  // Financial
+  amount            Decimal         @db.Decimal(12, 2)
+  odds              Decimal         @default(2.0) @db.Decimal(8, 2)
+  potentialWin      Decimal         @db.Decimal(12, 2)
+  actualWin         Decimal?        @db.Decimal(12, 2)
+
+  // Status
+  status            BetStatus       @default(PENDING)
+  settledAt         DateTime?
+
+  // Metadata
+  ipAddress         String?
+  metadata          Json?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([userId])
+  @@index([roundId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("casino_bets")
+}
+
+model SystemSettings {
+  id                String          @id @default(uuid())
+
+  // Platform
+  platformName      String          @default("Shakti11")
+  platformLogo      String?
+  welcomeBanner     String?
+  maintenanceMode   Boolean         @default(false)
+  registrationOpen  Boolean         @default(true)
+
+  // Global Betting Limits
+  globalMinBet      Decimal         @default(10) @db.Decimal(12, 2)
+  globalMaxBet      Decimal         @default(100000) @db.Decimal(12, 2)
+  globalMaxPayout   Decimal         @default(500000) @db.Decimal(12, 2)
+
+  // Commission Structure (JSON for flexibility)
+  commissionStructure Json?         // { masterAdmin: 10, admin: 5, agent: 2 }
+
+  // Settlement Settings
+  autoSettlementEnabled Boolean     @default(false)
+  settlementFrequency String        @default("WEEKLY") // WEEKLY, MONTHLY
+  settlementDay       Int           @default(0)  // 0=Sunday for weekly, 1-28 for monthly
+
+  // Currency
+  currency          String          @default("INR")
+  currencySymbol    String          @default("₹")
+
+  // Features Toggle
+  casinoEnabled     Boolean         @default(true)
+  liveBettingEnabled Boolean        @default(true)
+  depositEnabled    Boolean         @default(true)
+  withdrawalEnabled Boolean         @default(true)
+
+  // Security
+  maxLoginAttempts  Int             @default(5)
+  lockoutDuration   Int             @default(30) // minutes
+  sessionTimeout    Int             @default(30) // minutes
+  twoFactorRequired Boolean        @default(false) // require 2FA for admin
+
+  // Metadata
+  updatedBy         String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@map("system_settings")
+}
+
+// ============================================
+// EXISTING MODELS (unchanged)
+// ============================================
 
 model Configuration {
   id                String          @id @default(uuid())
@@ -404,22 +853,32 @@ model AuditLog {
   id                String          @id @default(uuid())
 
   userId            String?
-  userType          String?
+  userType          String?         // 'MASTER_ADMIN', 'AGENT', 'PLAYER'
   username          String?
 
-  action            String
-  resource          String
+  action            String          // 'CREATE', 'UPDATE', 'DELETE', 'LOGIN', 'SETTLE', etc.
+  resource          String          // 'USER', 'MATCH', 'BET', 'DEPOSIT', 'SETTLEMENT', etc.
   resourceId        String?
+  module            String?         // 'USER_MANAGEMENT', 'MATCHES', 'FINANCE', 'CASINO', 'SYSTEM'
 
   changes           Json?
+  previousData      Json?           // snapshot before change
+  newData           Json?           // snapshot after change
+
   ipAddress         String?
   userAgent         String?
+  requestMethod     String?         // GET, POST, PUT, DELETE
+  requestPath       String?         // API endpoint path
+
+  status            String?         // 'SUCCESS', 'FAILED'
+  errorMessage      String?
 
   createdAt         DateTime        @default(now())
 
   @@index([userId])
   @@index([action])
   @@index([resource])
+  @@index([module])
   @@index([createdAt])
   @@map("audit_logs")
 }
@@ -432,6 +891,7 @@ model Session {
   refreshToken      String?         @unique
   ipAddress         String?
   userAgent         String?
+  deviceInfo        Json?           // browser, OS, device type
   expiresAt         DateTime
   createdAt         DateTime        @default(now())
   lastActivityAt    DateTime        @default(now())
@@ -450,8 +910,9 @@ model Notification {
 
   title             String
   message           String
-  type              String
-  category          String?
+  type              String          // 'BET_SETTLED', 'DEPOSIT_APPROVED', 'MATCH_STARTING', 'SYSTEM', etc.
+  category          String?         // 'BETTING', 'FINANCE', 'SYSTEM', 'PROMOTION'
+  priority          String          @default("NORMAL") // 'LOW', 'NORMAL', 'HIGH', 'URGENT'
 
   read              Boolean         @default(false)
   readAt            DateTime?
@@ -466,5 +927,87 @@ model Notification {
   @@index([agentId])
   @@index([read])
   @@index([createdAt])
+  @@index([type])
   @@map("notifications")
+}
+
+// ============================================
+// SUPPORT TICKET SYSTEM
+// ============================================
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+model SupportTicket {
+  id                String          @id @default(uuid())
+
+  // Sender info
+  senderType        String          // 'player' or 'agent'
+  senderId          String          // userId or agentId
+  senderUsername     String
+
+  // Recipient info
+  recipientType     String          // 'agent' or 'master'
+  recipientId       String          // agentId or masterAdminId
+
+  // Ticket details
+  subject           String
+  status            TicketStatus    @default(OPEN)
+  priority          TicketPriority  @default(NORMAL)
+
+  // Messages
+  messages          SupportMessage[]
+
+  // Metadata
+  closedAt          DateTime?
+  closedBy          String?
+  metadata          Json?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([senderId])
+  @@index([recipientId])
+  @@index([status])
+  @@index([senderType])
+  @@index([recipientType])
+  @@index([createdAt])
+  @@map("support_tickets")
+}
+
+model SupportMessage {
+  id                String          @id @default(uuid())
+
+  ticketId          String
+  ticket            SupportTicket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  // Sender
+  senderType        String          // 'player', 'agent', 'master'
+  senderId          String
+  senderUsername     String
+
+  // Message content
+  message           String          @db.Text
+
+  // Read status
+  read              Boolean         @default(false)
+  readAt            DateTime?
+
+  createdAt         DateTime        @default(now())
+
+  @@index([ticketId])
+  @@index([senderId])
+  @@index([read])
+  @@index([createdAt])
+  @@map("support_messages")
 }

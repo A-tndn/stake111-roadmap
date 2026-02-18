@@ -16,7 +16,7 @@ export default function Navbar() {
   const isAgent = user?.type === 'agent';
 
   return (
-    <nav className="bg-white border-b border-gray-200 px-4 py-3 sticky top-0 z-50">
+    <nav className="bg-card border-b border-border px-4 py-3 sticky top-0 z-50">
       <div className="max-w-7xl mx-auto flex items-center justify-between">
         <div className="flex items-center gap-6">
           <h1
@@ -31,19 +31,19 @@ export default function Navbar() {
               <>
                 <button
                   onClick={() => router.push('/agent/dashboard')}
-                  className="text-sm text-gray-600 hover:text-blue-600 transition"
+                  className="text-sm text-muted-foreground hover:text-blue-600 transition"
                 >
                   Dashboard
                 </button>
                 <button
                   onClick={() => router.push('/agent/players')}
-                  className="text-sm text-gray-600 hover:text-blue-600 transition"
+                  className="text-sm text-muted-foreground hover:text-blue-600 transition"
                 >
                   Players
                 </button>
                 <button
                   onClick={() => router.push('/agent/credits')}
-                  className="text-sm text-gray-600 hover:text-blue-600 transition"
+                  className="text-sm text-muted-foreground hover:text-blue-600 transition"
                 >
                   Credits
                 </button>
@@ -52,19 +52,19 @@ export default function Navbar() {
               <>
                 <button
                   onClick={() => router.push('/dashboard')}
-                  className="text-sm text-gray-600 hover:text-blue-600 transition"
+                  className="text-sm text-muted-foreground hover:text-blue-600 transition"
                 >
                   Dashboard
                 </button>
                 <button
                   onClick={() => router.push('/matches')}
-                  className="text-sm text-gray-600 hover:text-blue-600 transition"
+                  className="text-sm text-muted-foreground hover:text-blue-600 transition"
                 >
                   Matches
                 </button>
                 <button
                   onClick={() => router.push('/bets')}
-                  className="text-sm text-gray-600 hover:text-blue-600 transition"
+                  className="text-sm text-muted-foreground hover:text-blue-600 transition"
                 >
                   My Bets
                 </button>
@@ -82,8 +82,8 @@ export default function Navbar() {
 
           <div className="flex items-center gap-2">
             <div className="text-right hidden sm:block">
-              <p className="text-sm font-medium text-gray-900">{user?.displayName || user?.username}</p>
-              <p className="text-xs text-gray-500 capitalize">{user?.role?.toLowerCase().replace('_', ' ')}</p>
+              <p className="text-sm font-medium text-foreground">{user?.displayName || user?.username}</p>
+              <p className="text-xs text-muted-foreground capitalize">{user?.role?.toLowerCase().replace('_', ' ')}</p>
             </div>
 
             <button

@@ -11,6 +11,8 @@ export default function Home() {
   useEffect(() => {
     if (!isAuthenticated) {
       router.push('/login');
+    } else if (user?.type === 'master_admin') {
+      router.push('/master/dashboard');
     } else if (user?.type === 'agent') {
       router.push('/agent/dashboard');
     } else {
